@@ -8,7 +8,7 @@ import { printCliCommandsTable } from './templates/cli-commands.mjs';
 
 const TITLE = 'Puppeteer Monitor';
 const TAGLINE = 'Browser console, network & DOM capture for debugging and LLM workflows';
-const REPO_URL = 'https://git.romanmatena.cz/x24gate/puppeteer-monitor';
+const REPO_URL = 'https://github.com/romanmatena/puppeteer-monitor';
 
 export function printAppIntro() {
   console.log('');

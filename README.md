@@ -13,6 +13,8 @@
 
 Browser console, network, DOM, and screenshot monitoring for debugging and LLM workflows.
 
+**[npm](https://www.npmjs.com/package/puppeteer-monitor)** · **[GitHub](https://github.com/romanmatena/puppeteer-monitor)**
+
 [Installation](#installation) · [Quick Start](#quick-start) · [HTTP API](#http-api) · [Contributing](CONTRIBUTING.md)
 
 </div>

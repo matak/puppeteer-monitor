@@ -1,6 +1,6 @@
 {
   "name": "puppeteer-monitor",
-  "version": "1.11.1",
+  "version": "1.11.2",
   "description": "Browser console, network, DOM monitoring for debugging. Captures console, network, cookies, screenshot, DOM. HTTP API for LLM/scripts. WSL+Windows, Linux, Open/Join modes.",
   "type": "module",
   "bin": {

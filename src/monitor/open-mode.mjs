@@ -7,7 +7,6 @@ import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
 import { execSync } from 'child_process';
-import crypto from 'crypto';
 import { C, log } from '../utils/colors.mjs';
 import {
   getWindowsHostForWSL,
@@ -29,6 +28,7 @@ import { printApiHelpTable } from '../templates/api-help.mjs';
 import { printModeHeading, printBulletBox } from '../templates/section-heading.mjs';
 import { createTable, printTable } from '../templates/table-helper.mjs';
 import { writeStatusLine, clearStatusLine } from '../utils/status-line.mjs';
+import { getProfileIdFromProjectDir } from '../utils/profile-id.mjs';
 
 // Browser and page in module scope for cleanup
 let browser = null;
@@ -583,11 +583,10 @@ export async function runOpenMode(url, options = {}) {
           // Path is on Windows drive, convert it directly
           windowsUserDataDir = USER_DATA_DIR.replace(/^\/mnt\/([a-z])\//, (_, drive) => `${drive.toUpperCase()}:\\`).replace(/\//g, '\\');
         } else {
-          // Path is on WSL filesystem - use Windows LOCALAPPDATA with project hash
-          const projectHash = crypto.createHash('md5').update(outputDir).digest('hex').substring(0, 12);
-          const projectName = path.basename(outputDir).replace(/[^a-zA-Z0-9_-]/g, '_');
+          // Path is on WSL filesystem - use Windows LOCALAPPDATA with project-specific profile ID
+          const { profileId } = getProfileIdFromProjectDir(outputDir);
           const localAppData = getWindowsLocalAppData();
-          windowsUserDataDir = `${localAppData}\\puppeteer-monitor\\${projectName}_${projectHash}`;
+          windowsUserDataDir = `${localAppData}\\puppeteer-monitor\\${profileId}`;
         }
 
         // CMD.EXE stderr + Profile/Project in bullet box

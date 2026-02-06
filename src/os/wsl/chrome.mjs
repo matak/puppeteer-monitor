@@ -11,7 +11,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import crypto from 'crypto';
+import { getProfileIdFromProjectDir } from '../../utils/profile-id.mjs';
 import { execFileSync, execSync, spawnSync } from 'child_process';
 import { C, log } from '../../utils/colors.mjs';
 
@@ -73,15 +73,15 @@ export function getWindowsLocalAppData() {
 /**
  * Generate a unique Windows profile path for a project.
  * Uses local Windows directory instead of UNC path for better Chrome compatibility.
+ * Delegates to getProfileIdFromProjectDir for consistent projectName + hash.
  *
  * @param {string} projectDir - WSL project directory path
  * @returns {string} Windows-style profile path (in LOCALAPPDATA\puppeteer-monitor\)
  */
 export function getWindowsProfilePath(projectDir) {
-  const projectName = path.basename(projectDir);
-  const hash = crypto.createHash('md5').update(projectDir).digest('hex').substring(0, 12);
+  const { profileId } = getProfileIdFromProjectDir(projectDir);
   const localAppData = getWindowsLocalAppData();
-  return `${localAppData}\\puppeteer-monitor\\${projectName}_${hash}`;
+  return `${localAppData}\\puppeteer-monitor\\${profileId}`;
 }
 
 /**
@@ -266,9 +266,7 @@ export function findProjectChrome(instances, projectDir) {
     return { found: false, instance: null, matchType: 'none' };
   }
 
-  const projectName = path.basename(projectDir);
-  const hash = crypto.createHash('md5').update(projectDir).digest('hex').substring(0, 12);
-  const expectedProfileId = `${projectName}_${hash}`;
+  const { projectName, profileId: expectedProfileId } = getProfileIdFromProjectDir(projectDir);
 
   for (const inst of instances) {
     const instProfile = inst.profile.toLowerCase();

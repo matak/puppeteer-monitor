@@ -23,7 +23,7 @@ jobs:
         run: pnpm install
 
       - name: Verify CLI
-        run: pnpm exec puppeteer-monitor --help
+        run: node src/cli.mjs --help
 
       - name: Verify init
-        run: pnpm exec puppeteer-monitor-init --help
+        run: node src/init.mjs --help

@@ -58,9 +58,9 @@ pnpm add -g @romanmatena/browsermonitor
 
 **Note:** Chromium download is skipped — browsermonitor uses your system Chrome/Chromium. No extra 300 MB download.
 
-**First run:** When you run `browsermonitor` in a project directory for the first time, it auto-creates `.browsermonitor/` with `settings.json` and optionally updates agent files (`CLAUDE.md`, `AGENTS.md`, `memory.md`).
+**First run (interactive):** When you run `browsermonitor` for the first time in a project directory, interactive mode asks for HTTP API port, saves `settings.json`, and updates agent files (`CLAUDE.md`, `AGENTS.md`, `memory.md`). When you press `o` (open), it asks for the default URL.
 
-**Manual setup:** Run `browsermonitor init` to re-run the setup wizard.
+**Re-init:** Run `browsermonitor init` to recreate settings and update agent files.
 
 ## Quick Start
 
@@ -74,7 +74,7 @@ browsermonitor --join=9222        # Join mode: attach to existing Chrome on port
 
 | Mode        | How to run              | When to use |
 |------------|--------------------------|-------------|
-| **Interactive** | `browsermonitor` (no flags) | Menu asks for project root, then: **o** = open Chrome, **j** = join running Chrome, **q** = quit. |
+| **Interactive** | `browsermonitor` (no flags) | First run asks HTTP port. Then menu: **o** = open Chrome (asks URL on first use), **j** = join running Chrome, **q** = quit. |
 | **Open**   | `browsermonitor --open [url]` | Launch a new Chrome and monitor it. Uses current dir for logs. |
 | **Join**   | `browsermonitor --join=PORT`  | Attach to an existing Chrome with remote debugging on PORT (e.g. 9222). Port is required. |
 

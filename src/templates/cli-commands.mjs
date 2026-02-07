@@ -18,7 +18,7 @@ export const CLI_EXAMPLES = [
   { command: 'browsermonitor --open', description: 'Launch Chrome and monitor (URL from settings or first arg)' },
   { command: 'browsermonitor --open https://localhost:5173/', description: 'Open with URL' },
   { command: 'browsermonitor --join=9222', description: 'Attach to Chrome with remote debugging on port 9222' },
-  { command: 'browsermonitor init', description: 'Run setup: create .browsermonitor/, settings.json, update agent files' },
+  { command: 'browsermonitor init', description: 'Create .browsermonitor/, settings.json with defaults, update agent files' },
   { command: 'browsermonitor --help', description: 'Show full help (options, API table, examples)' },
 ];
 

@@ -6,7 +6,7 @@
  * Configuration in .browsermonitor/settings.json (created on first run).
  *
  * Subcommands:
- *   init         → Run setup (create .browsermonitor/, update agent files)
+ *   init         → Create .browsermonitor/, settings.json, update agent files
  *
  * Mode is chosen by arguments:
  *   (none)       → Interactive: menu (o = open, j = join, q = quit)
@@ -53,11 +53,11 @@ What it does:
   printCliCommandsTable({ showEntry: true, showUsage: true });
   console.log(`
 Subcommands:
-  init                  Run setup: create .browsermonitor/, settings.json, update agent files
+  init                  Create .browsermonitor/, settings.json with defaults, update agent files
 
 Modes (chosen by flags; only one applies):
-  INTERACTIVE (default)   No flag. Asks for project root, then menu:
-                            o = open Chrome (launch and monitor)
+  INTERACTIVE (default)   No flag. First run asks HTTP port. Menu:
+                            o = open Chrome (asks URL on first use)
                             j = join running Chrome (pick instance/tab)
                             q = quit
 

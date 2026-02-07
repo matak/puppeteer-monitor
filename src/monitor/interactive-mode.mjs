@@ -196,13 +196,11 @@ export async function runInteractiveMode(options, deps) {
 
   const { runOpenMode, runJoinMode } = deps;
 
-  let outputDir = optionsOutputDir || process.cwd();
-  let paths = optionsPaths || getPaths(outputDir);
+  const outputDir = optionsOutputDir || process.cwd();
+  const paths = optionsPaths || getPaths(outputDir);
 
-  // If not initialized, ask for project root, URL, port → save settings → run init
+  // First run: ask for defaultUrl and httpPort, save, update agent files
   if (!isInitialized(outputDir) && process.stdin.isTTY) {
-    outputDir = await askProjectDirForOpen(outputDir);
-    paths = getPaths(outputDir);
     ensureDirectories(outputDir);
 
     defaultUrl = await askDefaultUrl(config.defaultUrl || defaultUrl);
@@ -246,7 +244,7 @@ export async function runInteractiveMode(options, deps) {
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
   }
-  process.stdin.resume(); // ensure stdin is readable after askProjectDirForOpen (may have paused it)
+  process.stdin.resume();
 
   const MENU_INDENT = '    ';
   const showMenu = () => {

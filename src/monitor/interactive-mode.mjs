@@ -12,7 +12,8 @@ import { printBulletBox, printInteractiveMenuBlock, printModeHeading } from '../
 import { createTable, printTable } from '../templates/table-helper.mjs';
 import { buildWaitForChromeContent } from '../templates/wait-for-chrome.mjs';
 import { writeStatusLine, clearStatusLine } from '../utils/status-line.mjs';
-import { getPaths, ensureDirectories, loadSettings, saveSettings, isInitialized, DEFAULT_SETTINGS } from '../settings.mjs';
+import { getPaths, ensureDirectories, saveSettings, isInitialized, DEFAULT_SETTINGS } from '../settings.mjs';
+import { askHttpPort } from '../utils/ask.mjs';
 
 /**
  * Collect Chrome instances with remote debugging (for interactive "join").
@@ -43,28 +44,6 @@ export async function getChromeInstances() {
   } finally {
     clearStatusLine();
   }
-}
-
-/**
- * Ask user for HTTP API port (single line, stdin.once so stdin stays open).
- */
-function askHttpPort(defaultPort) {
-  return new Promise((resolve) => {
-    const wasRaw = process.stdin.isTTY && process.stdin.isRaw;
-    if (wasRaw) process.stdin.setRawMode(false);
-
-    process.stdout.write(`  ${C.cyan}HTTP API port${C.reset} [${C.dim}${defaultPort}${C.reset}]: `);
-    process.stdin.resume();
-    process.stdin.setEncoding('utf8');
-    process.stdin.once('data', (chunk) => {
-      process.stdin.pause();
-      if (wasRaw && process.stdin.isTTY) process.stdin.setRawMode(true);
-      const trimmed = chunk.toString().trim().split('\n')[0].trim();
-      if (trimmed === '') { resolve(defaultPort); return; }
-      const num = parseInt(trimmed, 10);
-      resolve(!Number.isNaN(num) && num >= 1 && num <= 65535 ? num : defaultPort);
-    });
-  });
 }
 
 /**

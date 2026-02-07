@@ -20,6 +20,7 @@ import {
 } from './settings.mjs';
 import { C } from './utils/colors.mjs';
 import { printBulletBox } from './templates/section-heading.mjs';
+import { askDefaultUrl } from './utils/ask.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -60,22 +61,6 @@ function replaceOrAppendSection(hostDir, docFilename, templateContent) {
   } catch {
     return null;
   }
-}
-
-/**
- * Prompt user for default URL (single line).
- */
-function askDefaultUrl(defaultValue) {
-  return new Promise((resolve) => {
-    process.stdout.write(`  ${C.cyan}Default URL${C.reset} [${C.dim}${defaultValue}${C.reset}]: `);
-    process.stdin.resume();
-    process.stdin.setEncoding('utf8');
-    process.stdin.once('data', (chunk) => {
-      process.stdin.pause();
-      const trimmed = chunk.toString().trim().split('\n')[0].trim();
-      resolve(trimmed || defaultValue);
-    });
-  });
 }
 
 /**

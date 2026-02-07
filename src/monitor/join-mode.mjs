@@ -5,11 +5,11 @@
 import puppeteer from 'puppeteer';
 import fs from 'fs';
 import path from 'path';
-import readline from 'readline';
 import { execSync } from 'child_process';
 import { C, log } from '../utils/colors.mjs';
 import { getChromeProfileLocation } from '../utils/chrome-profile-path.mjs';
 import {
+  isWsl,
   getWindowsHostForWSL,
   detectWindowsChromeCanaryPath,
   printCanaryInstallInstructions,
@@ -23,41 +23,47 @@ import {
   runWslDiagnostics,
 } from '../os/wsl/index.mjs';
 import { LogBuffer } from '../logging/index.mjs';
-import { createHttpServer } from '../http-server.mjs';
-import { setupPageMonitoring as setupPageMonitoringShared } from './page-monitoring.mjs';
 import { askUserToSelectPage } from './tab-selection.mjs';
 import { askYesNo } from '../utils/ask.mjs';
-import { printReadyHelp, printStatusBlock, KEYS_JOIN } from '../templates/ready-help.mjs';
+import { printReadyHelp, KEYS_JOIN } from '../templates/ready-help.mjs';
 import { printJoinConnectedBlock, printModeHeading } from '../templates/section-heading.mjs';
-import { printApiHelpTable } from '../templates/api-help.mjs';
 import { createTable, printTable } from '../templates/table-helper.mjs';
 import { buildWaitForChromeContent } from '../templates/wait-for-chrome.mjs';
 import { writeStatusLine, clearStatusLine } from '../utils/status-line.mjs';
+import {
+  filterUserPages,
+  createSetupPageMonitoring,
+  createHelpHandlers,
+  wireHttpState,
+  createSwitchTabs,
+  createCleanup,
+  setupKeyboardInput,
+} from './shared/index.mjs';
 
 /**
- * Run in Join Mode - attach to an existing Chrome browser
- * @param {number} port - Chrome debugging port (default: 9222)
- * @param {Object} options - Monitor options
+ * Run in Join Mode - attach to an existing Chrome browser.
+ * If options.joinPort is given, connects to that port directly.
+ * If not, scans for running Chrome instances (WSL: process scan, other: probe 9222-9229).
  */
-export async function runJoinMode(port, options = {}) {
+export async function runJoinMode(defaultUrl, options = {}) {
   const {
+    joinPort = null,
     realtime = false,
-    outputDir = process.cwd(),
-    paths = null,
+    outputDir,
+    paths,
     ignorePatterns = [],
     hardTimeout = 0,
-    httpPort = 60001,
-    defaultUrl = '',
-    host = null, // Allow explicit host override
-    sharedHttpState = null,
-    sharedHttpServer = null,
+    httpPort,
+    host = null,
+    sharedHttpState,
+    sharedHttpServer,
     skipModeHeading = false,
   } = options;
 
   if (!skipModeHeading) printModeHeading('Join mode');
   const lazyMode = !realtime;
   const connectHost = host || getWindowsHostForWSL({ quiet: true });
-  const browserURL = `http://${connectHost}:${port}`;
+  const browserURL = joinPort ? `http://${connectHost}:${joinPort}` : null;
   // Mutable URL that will be updated if auto-port-selection changes the port
   let currentBrowserURL = browserURL;
 
@@ -71,286 +77,68 @@ export async function runJoinMode(port, options = {}) {
 
   let browser = null;
   let monitoredPages = [];
-  let cleanupDone = false;
-  let httpServer = null;
-  let isSelectingTab = false; // Flag to pause main keypress handler during tab selection
-  let activePageCleanup = null;
-  let collectingPaused = false; // When true, console/network events are not recorded
+  let httpServer = sharedHttpServer;
+  let isSelectingTab = false;
+  let collectingPaused = false;
 
-  // Output counter for periodic help reminder (same block as initial Ready, every HELP_INTERVAL)
-  let outputCounter = 0;
-  const HELP_INTERVAL = 5;
-  function maybeShowHelp() {
-    outputCounter++;
-    if (outputCounter % HELP_INTERVAL === 0) {
-      printReadyHelp(httpPort, KEYS_JOIN);
-    }
-  }
+  // ===== SHARED MODULES WIRING =====
 
-  // In-session help (h key) – full table with session context for Claude Code
-  function printHelp() {
-    const currentUrl = monitoredPages[0]?.url?.() || defaultUrl || '';
-    const profileLoc = getChromeProfileLocation(outputDir);
-    console.log(`${C.cyan}Join mode${C.reset}  Browser: ${C.brightGreen}${currentBrowserURL}${C.reset}  │  Dir: ${outputDir}`);
-    printApiHelpTable({
-      port: httpPort,
-      showApi: true,
-      showInteractive: true,
-      showOutputFiles: true,
-      context: {
-        consoleLog: logBuffer.CONSOLE_LOG,
-        networkLog: logBuffer.NETWORK_LOG,
-        networkDir: logBuffer.NETWORK_DIR,
-        cookiesDir: logBuffer.COOKIES_DIR,
-        domHtml: logBuffer.DOM_HTML,
-        screenshot: logBuffer.SCREENSHOT,
-      },
-      sessionContext: {
-        currentUrl: currentUrl || undefined,
-        profilePath: profileLoc?.path,
-      },
-    });
-  }
-
-  // Use shared HTTP server (started in CLI) or create our own
-  if (sharedHttpState && sharedHttpServer) {
-    httpServer = sharedHttpServer;
-    sharedHttpState.mode = 'join';
-    sharedHttpState.logBuffer = logBuffer;
-    sharedHttpState.getPages = () => monitoredPages;
-    sharedHttpState.getCollectingPaused = () => collectingPaused;
-    sharedHttpState.setCollectingPaused = (v) => { collectingPaused = !!v; };
-    sharedHttpState.getAllTabs = async () => {
-      if (!browser) return [];
-      const allPages = await browser.pages();
-      const isUserPage = (pg) => {
-        const u = pg.url();
-        return !u.startsWith('chrome://') && !u.startsWith('devtools://') && !u.startsWith('chrome-extension://');
-      };
-      let pages = allPages.filter(isUserPage);
-      const nonBlank = pages.filter(pg => pg.url() !== 'about:blank');
-      if (nonBlank.length > 0) pages = nonBlank;
-      return pages.map((pg, i) => ({ index: i + 1, url: pg.url() }));
-    };
-    sharedHttpState.switchToTab = async (index) => {
-      if (!browser) return { success: false, error: 'Browser not connected' };
-      try {
-        const allPages = await browser.pages();
-        const isUserPage = (pg) => {
-          const u = pg.url();
-          return !u.startsWith('chrome://') && !u.startsWith('devtools://') && !u.startsWith('chrome-extension://');
-        };
-        let pages = allPages.filter(isUserPage);
-        const nonBlank = pages.filter(pg => pg.url() !== 'about:blank');
-        if (nonBlank.length > 0) pages = nonBlank;
-        if (index < 1 || index > pages.length) return { success: false, error: `Invalid index. Use 1-${pages.length}.` };
-        const selectedPage = pages[index - 1];
-        monitoredPages = [selectedPage];
-        setupPageMonitoring(selectedPage, 'Page');
-        logBuffer.printConsoleSeparator('TAB SWITCHED');
-        logBuffer.printNetworkSeparator('TAB SWITCHED');
-        return { success: true, url: selectedPage.url() };
-      } catch (e) {
-        return { success: false, error: e.message };
-      }
-    };
-  } else {
-    httpServer = createHttpServer({
-      port: httpPort,
-      mode: 'join',
-      logBuffer,
-      getPages: () => monitoredPages,
-      getCollectingPaused: () => collectingPaused,
-      setCollectingPaused: (v) => { collectingPaused = !!v; },
-    });
-  }
-
-  async function cleanup(code = 0, closeBrowser = false) {
-    if (cleanupDone) return;
-    cleanupDone = true;
-
-    console.log('');
-    log.info(closeBrowser ? 'Disconnecting and closing Chrome...' : 'Disconnecting...');
-
-    try {
-      if (httpServer) {
-        await new Promise((resolve) => httpServer.close(resolve));
-        log.dim('HTTP server closed');
-      }
-    } catch (e) {}
-
-    try {
-      if (browser) {
-        if (closeBrowser) {
-          await browser.close();
-          log.success('Browser closed');
-        } else {
-          browser.disconnect();
-          log.success('Disconnected from browser (Chrome still running)');
-        }
-      }
-    } catch (e) {}
-
-    process.exit(code);
-  }
-
-  process.on('SIGINT', () => cleanup(0, false));
-  process.on('SIGTERM', () => cleanup(0, false));
-  process.on('uncaughtException', (e) => {
-    const msg = (e && e.message) || String(e);
-    if (/Execution context was destroyed|Target closed|Protocol error/.test(msg)) {
-      log.dim(`Navigation/context closed: ${msg.slice(0, 60)}… (continuing)`);
-      return;
-    }
-    log.error(`Uncaught exception: ${e.message}`);
-    cleanup(1);
+  const { setupPageMonitoring, cleanupActivePageListeners } = createSetupPageMonitoring({
+    logBuffer,
+    getCollectingPaused: () => collectingPaused,
   });
 
-  if (hardTimeout > 0) {
-    setTimeout(() => {
-      log.error(`HARD TIMEOUT (${hardTimeout}ms) - forcing exit`);
-      cleanup(1);
-    }, hardTimeout);
-  }
-
-  function setupKeyboardInput() {
-    readline.emitKeypressEvents(process.stdin);
-    if (process.stdin.isTTY) {
-      process.stdin.setRawMode(true);
-    }
-
-    process.stdin.on('keypress', async (str, key) => {
-      // Ctrl+C always works
-      if (key.ctrl && key.name === 'c') {
-        cleanup(0);
-        return;
+  const { cleanup } = createCleanup({
+    getBrowser: () => browser,
+    getHttpServer: () => httpServer,
+    closeBrowserFn: async (br, closeBrowser) => {
+      cleanupActivePageListeners();
+      if (closeBrowser) {
+        await br.close();
+        log.success('Browser closed');
+      } else {
+        br.disconnect();
+        log.success('Disconnected from browser (Chrome still running)');
       }
+    },
+    hardTimeout,
+  });
 
-      // Ignore other keys during tab selection (the selection handler will process them)
-      if (isSelectingTab) {
-        return;
-      }
+  const { maybeShowHelp, printHelp } = createHelpHandlers({
+    httpPort,
+    keysVariant: KEYS_JOIN,
+    logBuffer,
+    outputDir,
+    modeLabel: 'Join mode',
+    getCurrentUrl: () => monitoredPages[0]?.url?.() || defaultUrl || '',
+    getProfilePath: () => getChromeProfileLocation(outputDir)?.path,
+    getBrowserUrl: () => currentBrowserURL,
+  });
 
-      // Shortcuts only without modifiers (no Ctrl, Shift, Win)
-      if (key.ctrl || key.shift || key.meta) {
-        return;
-      }
+  wireHttpState(sharedHttpState, {
+    mode: 'join',
+    logBuffer,
+    getMonitoredPages: () => monitoredPages,
+    getCollectingPaused: () => collectingPaused,
+    setCollectingPaused: (v) => { collectingPaused = !!v; },
+    getBrowser: () => browser,
+    setupPageMonitoring,
+    onTabSwitched: (p) => { monitoredPages = [p]; },
+  });
 
-      if (key.name === 'd') {
-        const page = monitoredPages.length > 0 ? monitoredPages[0] : null;
-        await logBuffer.dumpBuffersToFiles({
-          dumpCookies: page ? () => logBuffer.dumpCookiesFromPage(page) : null,
-          dumpDom: page ? () => logBuffer.dumpDomFromPage(page) : null,
-          dumpScreenshot: page ? () => logBuffer.dumpScreenshotFromPage(page) : null,
-        });
-        maybeShowHelp();
-      } else if (key.name === 'c') {
-        logBuffer.clearAllBuffers();
-        maybeShowHelp();
-      } else if (key.name === 'q') {
-        cleanup(0, false);
-      } else if (key.name === 'k') {
-        log.warn('Closing Chrome and exiting...');
-        cleanup(0, true);
-      } else if (key.name === 's') {
-        const stats = logBuffer.getStats();
-        const urls = monitoredPages.map(p => p.url()).join(', ');
-        printStatusBlock(stats, urls, monitoredPages.length, collectingPaused);
-        maybeShowHelp();
-      } else if (key.name === 'p') {
-        collectingPaused = !collectingPaused;
-        log.info(collectingPaused ? 'Collecting stopped (paused). Press p or curl .../start to resume.' : 'Collecting started (resumed).');
-        maybeShowHelp();
-      } else if (key.name === 't') {
-        // Switch tabs
-        await switchTabs();
-        maybeShowHelp();
-      } else if (key.name === 'h') {
-        // Show full help
-        printHelp();
-      }
-    });
-  }
-
-  function setupPageMonitoring(page, pageLabel) {
-    setupPageMonitoringShared(page, {
-      logBuffer,
-      getCollectingPaused: () => collectingPaused,
-      setActivePageCleanup: (fn) => { activePageCleanup = fn; },
-      pageLabel: pageLabel || '',
-    });
-  }
-
-  async function switchTabs() {
-    if (!browser) {
-      log.error('Browser not connected');
-      return;
-    }
-
-    try {
-      const allPages = await browser.pages();
-
-      // Filter out internal Chrome pages
-      const isUserPage = (pg) => {
-        const pgUrl = pg.url();
-        return !pgUrl.startsWith('chrome://') &&
-               !pgUrl.startsWith('devtools://') &&
-               !pgUrl.startsWith('chrome-extension://');
-      };
-      let pages = allPages.filter(isUserPage);
-
-      // If we have pages other than about:blank, filter out about:blank
-      const nonBlankPages = pages.filter(pg => pg.url() !== 'about:blank');
-      if (nonBlankPages.length > 0) {
-        pages = nonBlankPages;
-      }
-
-      if (pages.length === 0) {
-        log.warn('No user tabs found');
-        return;
-      }
-
-      if (pages.length === 1) {
-        log.info('Only one user tab available');
-        return;
-      }
-
-      isSelectingTab = true;
-      const selectedPage = await askUserToSelectPage(pages);
-      isSelectingTab = false;
-
-      if (selectedPage === null) {
-        log.dim('Tab switch cancelled');
-        return;
-      }
-
-      // Clear old monitoring and setup new
-      monitoredPages = [selectedPage];
-      setupPageMonitoring(selectedPage, 'Page');
-      log.success(`Now monitoring: ${C.brightCyan}${selectedPage.url()}${C.reset}`);
-
-      logBuffer.printConsoleSeparator('TAB SWITCHED');
-      logBuffer.printNetworkSeparator('TAB SWITCHED');
-
-    } catch (e) {
-      log.error(`Error switching tabs: ${e.message}`);
-      isSelectingTab = false;
-    }
-  }
+  const switchTabs = createSwitchTabs({
+    getBrowser: () => browser,
+    onTabSwitched: (p) => { monitoredPages = [p]; },
+    setupPageMonitoring,
+    logBuffer,
+    setSelectingTab: (v) => { isSelectingTab = v; },
+  });
 
   // ===== MAIN =====
-  // Detect WSL and show setup instructions proactively
-  const isWSL = (() => {
-    try {
-      const release = fs.readFileSync('/proc/version', 'utf8').toLowerCase();
-      return release.includes('microsoft') || release.includes('wsl');
-    } catch { return false; }
-  })();
-
   // Track actual port to use (may change if auto-selecting free port)
-  let actualPort = port;
+  let actualPort = joinPort;
 
-  if (isWSL) {
+  if (isWsl()) {
     writeStatusLine(`${C.dim}Detecting Chrome...${C.reset}`);
     // Chrome Canary required for launching (isolated from regular Chrome singleton)
     const chromePath = detectWindowsChromeCanaryPath();
@@ -419,13 +207,13 @@ export async function runJoinMode(port, options = {}) {
         ].join('\n');
       }
     } else if (chromePath) {
-      actualPort = findFreeDebugPort(instances, port);
+      actualPort = findFreeDebugPort(instances, joinPort);
       clearStatusLine();
       console.log(`  ${C.yellow}No Chrome for this project.${C.reset} Port ${actualPort}, profile ${C.dim}${profileLoc.path}${C.reset}`);
       shouldLaunchChrome = await askYesNo(`  Launch Chrome Canary for this project?`);
     } else {
       // Chrome Canary not installed
-      actualPort = findFreeDebugPort(instances, port);
+      actualPort = findFreeDebugPort(instances, joinPort);
       clearStatusLine();
       printCanaryInstallInstructions();
       log.info('Install Chrome Canary and try again.');
@@ -487,6 +275,32 @@ export async function runJoinMode(port, options = {}) {
 
   }
 
+  // Non-WSL: if no port given, scan for Chrome instances (with retry loop)
+  if (!isWsl() && !actualPort) {
+    const { getChromeInstances, askUserToSelectChromeInstance } = await import('../utils/chrome-instances.mjs');
+    let instances = await getChromeInstances();
+    while (instances.length === 0) {
+      const hint = 'Start Chrome with: google-chrome --remote-debugging-port=9222';
+      const titleContent = `${C.yellow}No Chrome with remote debugging found.${C.reset}\n${C.dim}${hint}${C.reset}`;
+      const content = buildWaitForChromeContent(titleContent);
+      const table = createTable({ colWidths: [72], tableOpts: { wordWrap: true } });
+      table.push([content]);
+      printTable(table);
+      await new Promise((resolve) => {
+        process.stdin.setRawMode?.(false);
+        process.stdin.resume();
+        process.stdin.once('data', () => {
+          if (process.stdin.isTTY) process.stdin.setRawMode(true);
+          resolve();
+        });
+      });
+      console.log('');
+      instances = await getChromeInstances();
+    }
+    actualPort = await askUserToSelectChromeInstance(instances);
+    if (!actualPort) process.exit(0);
+  }
+
   // Use actual port for connection (may have been changed by auto-detection)
   const finalBrowserURL = `http://${connectHost}:${actualPort}`;
   currentBrowserURL = finalBrowserURL;
@@ -496,43 +310,16 @@ export async function runJoinMode(port, options = {}) {
     logBuffer.clearNetworkDir();
   }
 
-  // HTTP server is already started via createHttpServer above
-
   try {
     writeStatusLine(`${C.dim}Connecting to browser...${C.reset}`);
     // Connect to existing Chrome instance via Chrome DevTools Protocol (CDP).
     // defaultViewport: null preserves the browser's actual viewport size.
-    // Without this, Puppeteer would resize the page to its default (800x600),
-    // causing the page content to shrink unexpectedly.
     browser = await puppeteer.connect({ browserURL: finalBrowserURL, defaultViewport: null });
 
     writeStatusLine(`${C.dim}Loading pages...${C.reset}`);
     const allPages = await browser.pages();
 
-    // Filter out internal/dev pages that are not useful for monitoring
-    const isUserPage = (page) => {
-      const url = page.url();
-      const title = page.title ? page.title() : '';
-
-      // Skip Chrome internal pages
-      if (url.startsWith('chrome://')) return false;
-      if (url.startsWith('chrome-extension://')) return false;
-      if (url.startsWith('devtools://')) return false;
-      if (url === 'about:blank') return false;
-
-      // Skip React/Redux DevTools and similar extensions
-      if (url.includes('react-devtools') || url.includes('redux-devtools')) return false;
-      if (url.includes('__react_devtools__')) return false;
-
-      // Skip extension pages by pattern
-      if (/^moz-extension:\/\//.test(url)) return false;  // Firefox extensions
-      if (/^extension:\/\//.test(url)) return false;
-
-      return true;
-    };
-
-    const userPages = allPages.filter(isUserPage);
-    const pages = userPages.length > 0 ? userPages : allPages; // Fallback to all if no user pages
+    const pages = filterUserPages(allPages);
 
     if (pages.length === 0) {
       clearStatusLine();
@@ -559,7 +346,7 @@ export async function runJoinMode(port, options = {}) {
     monitoredPages = [selectedPage];
     setupPageMonitoring(selectedPage, 'Page');
 
-    if (isWSL) {
+    if (isWsl()) {
       printJoinConnectedBlock(connectHost, selectedPage.url());
     }
 
@@ -575,9 +362,22 @@ export async function runJoinMode(port, options = {}) {
     logBuffer.printNetworkSeparator('CONNECTED - Listening for network requests');
 
     clearStatusLine(true);
-    // Ready block from template (same as periodic reminder)
     printReadyHelp(httpPort, KEYS_JOIN);
-    setupKeyboardInput();
+    setupKeyboardInput({
+      getActivePage: () => monitoredPages[0] || null,
+      logBuffer,
+      cleanup,
+      switchTabs,
+      printHelp,
+      maybeShowHelp,
+      isSelectingTab: () => isSelectingTab,
+      getCollectingPaused: () => collectingPaused,
+      setCollectingPaused: (v) => { collectingPaused = !!v; },
+      getStatusInfo: async () => ({
+        currentUrl: monitoredPages.map(p => p.url()).join(', '),
+        tabCount: monitoredPages.length,
+      }),
+    });
 
     await new Promise(() => {});
   } catch (e) {
@@ -587,17 +387,9 @@ export async function runJoinMode(port, options = {}) {
       log.error(`Cannot connect to Chrome at ${C.brightRed}${currentBrowserURL}${C.reset}`);
       console.log('');
 
-      // Check if we're in WSL - if so, run diagnostics
-      const isWSL = (() => {
-        try {
-          const release = fs.readFileSync('/proc/version', 'utf8').toLowerCase();
-          return release.includes('microsoft') || release.includes('wsl');
-        } catch { return false; }
-      })();
-
-      if (isWSL) {
+      if (isWsl()) {
         // Run comprehensive WSL diagnostics
-        const diagResult = await runWslDiagnostics(port, connectHost);
+        const diagResult = await runWslDiagnostics(actualPort, connectHost);
 
         // Handle port proxy conflict automatically
         if (diagResult.hasPortProxyConflict) {
@@ -610,7 +402,7 @@ export async function runJoinMode(port, options = {}) {
           const shouldFix = await askYesNo('Do you want me to fix this automatically? (remove port proxy, restart Chrome)');
 
           if (shouldFix) {
-            const fixPort = diagResult.actualPort || port;
+            const fixPort = diagResult.actualPort || actualPort;
 
             console.log(`${C.cyan}[1/2]${C.reset} Removing port proxy for port ${fixPort}...`);
             try {
@@ -622,7 +414,7 @@ export async function runJoinMode(port, options = {}) {
 
             console.log(`${C.cyan}[2/2]${C.reset} Stopping Chrome...`);
             try {
-              killPuppeteerMonitorChromes(true); // Only kill browsermonitor Chrome, not user's browser!
+              killPuppeteerMonitorChromes(true);
               console.log(`  ${C.green}✓${C.reset} Chrome stopped`);
             } catch (err) {
               console.log(`  ${C.yellow}!${C.reset} Could not stop Chrome: ${err.message}`);
@@ -638,12 +430,12 @@ export async function runJoinMode(port, options = {}) {
       } else {
         // Non-WSL: show basic help
         console.log(`  ${C.yellow}Make sure Chrome is running with remote debugging enabled:${C.reset}`);
-        console.log(`    ${C.dim}Windows:${C.reset} ${C.cyan}chrome.exe --remote-debugging-port=${port}${C.reset}`);
-        console.log(`    ${C.dim}Linux:${C.reset}   ${C.cyan}google-chrome --remote-debugging-port=${port}${C.reset}`);
-        console.log(`    ${C.dim}Mac:${C.reset}     ${C.cyan}/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=${port}${C.reset}`);
+        console.log(`    ${C.dim}Windows:${C.reset} ${C.cyan}chrome.exe --remote-debugging-port=${actualPort}${C.reset}`);
+        console.log(`    ${C.dim}Linux:${C.reset}   ${C.cyan}google-chrome --remote-debugging-port=${actualPort}${C.reset}`);
+        console.log(`    ${C.dim}Mac:${C.reset}     ${C.cyan}/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=${actualPort}${C.reset}`);
         console.log('');
         console.log(`  ${C.yellow}If connecting from remote server, create SSH reverse tunnel first:${C.reset}`);
-        console.log(`    ${C.cyan}ssh -R ${port}:localhost:${port} user@this-server${C.reset}`);
+        console.log(`    ${C.cyan}ssh -R ${actualPort}:localhost:${actualPort} user@this-server${C.reset}`);
         console.log('');
       }
     } else {

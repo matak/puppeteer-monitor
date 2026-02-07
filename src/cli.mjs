@@ -21,25 +21,49 @@
  *   --help           Show help
  */
 
-import { runInteractiveMode, runJoinMode, runOpenMode } from './monitor.mjs';
+import { parseArgs } from 'node:util';
+import { runJoinMode } from './monitor/join-mode.mjs';
+import { runOpenMode } from './monitor/open-mode.mjs';
 import { printAppIntro } from './intro.mjs';
 import { createHttpServer } from './http-server.mjs';
 import { printApiHelpTable } from './templates/api-help.mjs';
 import { printCliCommandsTable } from './templates/cli-commands.mjs';
-import { loadSettings, getPaths, ensureDirectories } from './settings.mjs';
+import { printModeHeading } from './templates/section-heading.mjs';
+import { loadSettings, getPaths, ensureDirectories, isInitialized, DEFAULT_SETTINGS, saveSettings } from './settings.mjs';
 import { runInit } from './init.mjs';
+import { resolveHttpPort, resolveDefaultUrl, askMode } from './utils/ask.mjs';
 
-// Parse arguments
-const args = process.argv.slice(2);
+// ---- Parse CLI arguments ----
+const { values: flags, positionals } = parseArgs({
+  args: process.argv.slice(2),
+  options: {
+    open:          { type: 'boolean', default: false },
+    join:          { type: 'string' },
+    port:          { type: 'string' },
+    realtime:      { type: 'boolean', default: false },
+    headless:      { type: 'boolean', default: false },
+    timeout:       { type: 'string', default: '0' },
+    'nav-timeout': { type: 'string' },
+    help:          { type: 'boolean', short: 'h', default: false },
+  },
+  allowPositionals: true,
+  strict: false,
+});
 
-// Handle `browsermonitor init` subcommand
-if (args[0] === 'init') {
+const subcommand = positionals[0];
+const urlFromArgs = positionals.find((a) => /^https?:\/\//.test(a) || a.includes('localhost'));
+const joinPort = flags.join ? parseInt(flags.join, 10) : null;
+const httpPortFromArgs = flags.port ? parseInt(flags.port, 10) : null;
+const hardTimeout = parseInt(flags.timeout, 10) || 0;
+
+// Handle `browsermonitor init`
+if (subcommand === 'init') {
   await runInit(process.cwd());
   process.exit(0);
 }
 
 // Show help
-if (args.includes('--help') || args.includes('-h')) {
+if (flags.help) {
   console.log(`
 Browser Monitor – capture browser console, network, and DOM for debugging and LLM workflows.
 
@@ -56,26 +80,20 @@ Subcommands:
   init                  Create .browsermonitor/, settings.json with defaults, update agent files
 
 Modes (chosen by flags; only one applies):
-  INTERACTIVE (default)   No flag. First run asks HTTP port. Menu:
-                            o = open Chrome (asks URL on first use)
-                            j = join running Chrome (pick instance/tab)
-                            q = quit
+  INTERACTIVE (default)   No flag. First run asks HTTP port and URL. Then menu:
+                            o = open Chrome, j = join running Chrome, q = quit
 
   OPEN (--open)           Launch a new Chrome and monitor it. URL = first positional or config.
-                          Uses current directory for logs. Good for local dev with a fresh profile.
 
-  JOIN (--join=PORT)      Attach to an existing Chrome with remote debugging on PORT.
-                          Port is required (e.g. --join=9222). Use when Chrome is already
-                          running (e.g. started by a script or on another machine via tunnel).
+  JOIN (--join=PORT)      Attach to existing Chrome with remote debugging on PORT.
+                          If PORT omitted, scans for running instances.
 
 Options:
   --port=PORT             HTTP API port (default: from settings or 60001)
-  --realtime              Write each event to files immediately (default: lazy, buffer in memory)
+  --realtime              Write each event to files immediately (default: lazy)
   --headless              Run Chrome without GUI
-  --open                  Go directly to open mode
-  --join=PORT             Go directly to join mode (PORT required)
   --timeout=MS            Hard timeout in ms; process exits after (0 = disabled)
-  --nav-timeout=MS        Navigation timeout in ms (default: from settings, 0 = no limit)
+  --nav-timeout=MS        Navigation timeout in ms (default: from settings)
   --help, -h              Show this help
 
 Config (.browsermonitor/settings.json):
@@ -86,24 +104,6 @@ Config (.browsermonitor/settings.json):
   process.exit(0);
 }
 
-// ---- Mode dispatch: --open | --join=PORT | interactive ----
-const openMode = args.some((a) => a === '--open' || a.startsWith('--open='));
-const joinArg = args.find((a) => a.startsWith('--join'));
-let joinPort = null;
-if (joinArg) {
-  if (joinArg === '--join' || !joinArg.includes('=')) {
-    console.error('Error: --join requires a port (e.g. --join=9222)');
-    process.exit(1);
-  }
-  const portStr = joinArg.split('=')[1];
-  joinPort = parseInt(portStr, 10);
-  if (Number.isNaN(joinPort) || joinPort < 1 || joinPort > 65535) {
-    console.error(`Error: invalid port for --join: ${portStr}`);
-    process.exit(1);
-  }
-}
-
-
 (async () => {
   // 1. Intro
   printAppIntro();
@@ -111,34 +111,35 @@ if (joinArg) {
   // 2. Project root = cwd, load existing settings (may be empty/missing)
   const projectRoot = process.cwd();
   ensureDirectories(projectRoot);
-  const config = loadSettings(projectRoot);
+  let config = loadSettings(projectRoot);
   const paths = getPaths(projectRoot);
 
   // 3. CLI args override settings.json
-  const realtimeMode = args.includes('--realtime') || config.realtime;
-  const headlessCli = args.includes('--headless');
-  const timeoutArg = args.find((a) => a.startsWith('--timeout='));
-  const hardTimeout = timeoutArg ? parseInt(timeoutArg.split('=')[1], 10) : 0;
-  const navTimeoutArg = args.find((a) => a.startsWith('--nav-timeout='));
-  const navigationTimeout = navTimeoutArg
-    ? parseInt(navTimeoutArg.split('=')[1], 10)
-    : (config.navigationTimeout !== undefined ? config.navigationTimeout : 60_000);
-  const urlFromArgs = args.find((a) => !a.startsWith('--'));
-  const url = urlFromArgs || config.defaultUrl || 'https://localhost:4000/';
-  const headless = headlessCli || config.headless || false;
-  const ignorePatterns = config.ignorePatterns || [];
-
-  const portArg = args.find((a) => a === '--port' || a.startsWith('--port='));
-  let httpPortFromArgs = null;
-  if (portArg) {
-    const val = portArg.includes('=') ? portArg.split('=')[1] : '';
-    const num = parseInt(val, 10);
-    if (!Number.isNaN(num) && num >= 1 && num <= 65535) httpPortFromArgs = num;
+  const realtimeMode = flags.realtime || config.realtime;
+  const navTimeoutFromArgs = flags['nav-timeout'] ? parseInt(flags['nav-timeout'], 10) : null;
+  const navigationTimeout = navTimeoutFromArgs
+    ?? (config.navigationTimeout !== undefined ? config.navigationTimeout : 60_000);
+  const headless = flags.headless || config.headless || false;
+  const httpPort = await resolveHttpPort(httpPortFromArgs ?? config.httpPort, DEFAULT_SETTINGS.httpPort);
+  const url = await resolveDefaultUrl(urlFromArgs || config.defaultUrl, DEFAULT_SETTINGS.defaultUrl);
+  
+  // 4. Need to initialize project (create .browsermonitor/, settings.json) before showing API info, because API port is part of config
+  if (!isInitialized(projectRoot)) {
+    saveSettings(projectRoot, { ...DEFAULT_SETTINGS, httpPort, defaultUrl: url, headless, navigationTimeout, realtime: realtimeMode });
+    config = loadSettings(projectRoot);
+    await runInit(projectRoot, config);
   }
-  const httpPort = httpPortFromArgs ?? config.httpPort ?? 60001;
 
-  // 4. Show API/output info
-  printApiHelpTable({ port: httpPort, showApi: true, showInteractive: false, showOutputFiles: true, noLeadingNewline: true });
+  // 5. Show API/output info (now httpPort is known)
+  printApiHelpTable({
+    url: url,
+    port: httpPort,
+    showApi: true,
+    showInteractive: false,
+    showOutputFiles: true,
+    noLeadingNewline: true,
+    context: paths,
+  });
 
   const sharedHttpState = {
     mode: 'interactive',
@@ -156,37 +157,44 @@ if (joinArg) {
   });
 
   const commonOptions = {
-    realtime: realtimeMode,
     outputDir: projectRoot,
     paths,
-    ignorePatterns,
+    realtime: realtimeMode,
+    ignorePatterns: config.ignorePatterns,
     hardTimeout,
     httpPort,
+    joinPort,
     sharedHttpState,
     sharedHttpServer,
   };
 
-  // 5. Dispatch to mode
-  if (openMode) {
-    console.log(`  [CLI] Open mode → ${url}`);
-    await runOpenMode(url, {
+  // 8. Dispatch to mode
+  if (flags.open) {
+    await runOpenMode(config.defaultUrl, {
       ...commonOptions,
       headless,
       navigationTimeout,
     });
   } else if (joinPort !== null) {
-    console.log(`  [CLI] Join mode → localhost:${joinPort}`);
-    await runJoinMode(joinPort, {
-      ...commonOptions,
-      defaultUrl: url,
-    });
+    await runJoinMode(config.defaultUrl, commonOptions);
   } else {
-    await runInteractiveMode({
-      ...commonOptions,
-      defaultUrl: url,
-      headless,
-      navigationTimeout,
-      config,
-    });
+    // No mode flag → ask user
+    printModeHeading('Choose mode');
+    const mode = await askMode();
+    if (mode === 'q') process.exit(0);
+
+    if (mode === 'o') {
+      await runOpenMode(config.defaultUrl, {
+        ...commonOptions,
+        headless,
+        navigationTimeout,
+        skipModeHeading: true,
+      });
+    } else if (mode === 'j') {
+      await runJoinMode(config.defaultUrl, {
+        ...commonOptions,
+        skipModeHeading: true,
+      });
+    }
   }
 })();

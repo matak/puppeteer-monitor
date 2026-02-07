@@ -37,11 +37,3 @@ export function clearStatusLine(ensureNewline = false) {
   lastLength = 0;
 }
 
-/**
- * Finish status line with newline (keeps the message visible).
- */
-export function finishStatusLine() {
-  if (!process.stdout.isTTY || lastLength === 0) return;
-  process.stdout.write('\n');
-  lastLength = 0;
-}

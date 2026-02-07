@@ -41,7 +41,6 @@ export function getLastCmdStderrAndClear() {
   _lastCmdStderrLines = [];
   return lines;
 }
-import { getWslDistroName } from './detect.mjs';
 
 // Cache for LOCALAPPDATA path
 let _cachedLocalAppData = null;
@@ -329,12 +328,9 @@ export function startChromeOnWindows(chromePath, port, profileDir) {
       );
     } catch { /* ignore */ }
 
-    const args = [
-      `--remote-debugging-port=${port}`,
-      `--user-data-dir="${profileDir}"`,
-    ].join("','");
-
-    const psCommand = `Start-Process -FilePath '${chromePath}' -ArgumentList '${args}'`;
+    // Escape single quotes for PowerShell literal strings (double them)
+    const psEsc = (s) => s.replace(/'/g, "''");
+    const psCommand = `Start-Process -FilePath '${psEsc(chromePath)}' -ArgumentList @('--remote-debugging-port=${port}','--user-data-dir=${psEsc(profileDir)}')`;
     execSync(`powershell.exe -NoProfile -Command "${psCommand}"`, { encoding: 'utf8', timeout: 10000 });
 
     log.dim('Waiting for Chrome to start...');
@@ -472,32 +468,3 @@ export function killPuppeteerMonitorChromes(usePowerShell = false) {
   }
 }
 
-/**
- * Legacy wrapper for backward compatibility.
- */
-export function checkChromeRunning() {
-  const { instances, chromeRunning } = scanChromeInstances();
-  if (!chromeRunning) {
-    return { running: false, withDebugPort: false, debugPort: null };
-  }
-  if (instances.length === 0) {
-    return { running: true, withDebugPort: false, debugPort: null };
-  }
-  return {
-    running: true,
-    withDebugPort: true,
-    debugPort: instances[0].port,
-    instances,
-  };
-}
-
-/**
- * Legacy wrapper for backward compatibility.
- */
-export function launchChromeFromWSL(chromePath, port) {
-  const distroName = getWslDistroName();
-  const wslPath = process.cwd();
-  const winPath = wslPath.replace(/\//g, '\\');
-  const profileDir = `\\\\wsl$\\${distroName}${winPath}\\.browsermonitor-profile`;
-  return startChromeOnWindows(chromePath, port, profileDir);
-}

@@ -16,7 +16,7 @@ export const PID_FILE = 'browsermonitor.pid';
 
 /** Default settings for new projects */
 export const DEFAULT_SETTINGS = {
-  defaultUrl: 'https://localhost:4000/',
+  defaultUrl: 'about:blank',
   headless: false,
   navigationTimeout: 60000,
   ignorePatterns: [],
@@ -30,6 +30,7 @@ export const DEFAULT_SETTINGS = {
  * @returns {Object} All paths used by browsermonitor
  */
 export function getPaths(projectRoot) {
+  projectRoot = path.resolve(projectRoot);
   const bmDir = path.join(projectRoot, BROWSERMONITOR_DIR);
   const puppeteerDir = path.join(bmDir, PUPPETEER_DIR);
   return {
@@ -59,22 +60,23 @@ export function isInitialized(projectRoot) {
 }
 
 /**
- * Load settings from .browsermonitor/settings.json, merged with defaults.
+ * Load settings from .browsermonitor/settings.json.
+ * Returns only what is actually saved — no default merging.
+ * Missing keys mean "not configured yet" so the caller can prompt the user.
  * @param {string} projectRoot
- * @returns {Object} Merged settings
+ * @returns {Object} Saved settings (may be empty)
  */
 export function loadSettings(projectRoot) {
   const { settingsFile } = getPaths(projectRoot);
   try {
     if (fs.existsSync(settingsFile)) {
       const raw = fs.readFileSync(settingsFile, 'utf8');
-      const saved = JSON.parse(raw);
-      return { ...DEFAULT_SETTINGS, ...saved };
+      return JSON.parse(raw);
     }
   } catch {
-    // Ignore parse errors, fall through to defaults
+    // Ignore parse errors, fall through to empty
   }
-  return { ...DEFAULT_SETTINGS };
+  return {};
 }
 
 /**

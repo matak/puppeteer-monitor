@@ -54,15 +54,3 @@ export function getWindowsHostForWSL(opts = {}) {
   return 'localhost';
 }
 
-/**
- * Convert WSL path to Windows UNC path.
- * Note: UNC paths don't work well with Chrome profiles due to singleton detection.
- *
- * @param {string} wslPath - WSL path (e.g., /srv/project)
- * @returns {string} Windows UNC path (e.g., \\wsl$\Ubuntu\srv\project)
- */
-export function wslToWindowsPath(wslPath) {
-  const distroName = getWslDistroName();
-  const winPath = wslPath.replace(/\//g, '\\');
-  return `\\\\wsl$\\${distroName}${winPath}`;
-}

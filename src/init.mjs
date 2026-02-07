@@ -6,11 +6,9 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
-  DEFAULT_SETTINGS,
   ensureDirectories,
-  getPaths,
   loadSettings,
-  saveSettings,
+  DEFAULT_SETTINGS,
 } from './settings.mjs';
 import { C } from './utils/colors.mjs';
 import { printBulletBox } from './templates/section-heading.mjs';
@@ -59,26 +57,21 @@ function replaceOrAppendSection(hostDir, docFilename, templateContent) {
 /**
  * Run browsermonitor initialization.
  */
-export async function runInit(projectRoot, options = {}) {
-  const { updateAgentFiles = true } = options;
+export async function runInit(projectRoot, config = {}) {
+  // Merge: explicit config > saved settings > defaults
+  const saved = loadSettings(projectRoot);
+  config = { ...DEFAULT_SETTINGS, ...saved, ...config };
+  const { updateAgentFiles = true } = config;
 
   ensureDirectories(projectRoot);
-
-  // Create settings.json with defaults if missing
-  const { settingsFile } = getPaths(projectRoot);
-  if (!fs.existsSync(settingsFile)) {
-    saveSettings(projectRoot, { ...DEFAULT_SETTINGS });
-  }
-
-  const settings = loadSettings(projectRoot);
 
   // Update agent files (render template with settings values)
   const agentUpdates = [];
   if (updateAgentFiles && fs.existsSync(TEMPLATE_PATH)) {
     let templateContent = fs.readFileSync(TEMPLATE_PATH, 'utf8');
     templateContent = templateContent
-      .replace(/\{\{DEFAULT_URL\}\}/g, settings.defaultUrl || 'https://localhost:4000/')
-      .replace(/\{\{HTTP_PORT\}\}/g, String(settings.httpPort || 60001));
+      .replace(/\{\{DEFAULT_URL\}\}/g, config.defaultUrl)
+      .replace(/\{\{HTTP_PORT\}\}/g, String(config.httpPort));
     for (const docFile of ['CLAUDE.md', 'AGENTS.md', 'memory.md']) {
       const action = replaceOrAppendSection(projectRoot, docFile, templateContent);
       if (action) agentUpdates.push(`${action} ${C.cyan}${docFile}${C.reset}`);
@@ -100,8 +93,8 @@ export async function runInit(projectRoot, options = {}) {
     `${C.cyan}Project:${C.reset} ${projectRoot}`,
     `${C.green}Created${C.reset} .browsermonitor/`,
   ];
-  if (settings.defaultUrl) {
-    lines[1] += ` → ${C.cyan}${settings.defaultUrl}${C.reset}`;
+  if (config.defaultUrl) {
+    lines[1] += ` → ${C.cyan}${config.defaultUrl}${C.reset}`;
   }
   if (agentUpdates.length > 0) {
     lines.push(`${C.green}Agent docs:${C.reset} ${agentUpdates.join(', ')}`);

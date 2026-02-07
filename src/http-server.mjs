@@ -12,8 +12,8 @@ import http from 'http';
 import { C, log } from './utils/colors.mjs';
 import { getFullTimestamp } from './logging/index.mjs';
 import { getComputedStylesFromPage } from './logging/dump.mjs';
-import { printApiHelpTable, API_ENDPOINTS } from './templates/api-help.mjs';
-import { printSectionHeading } from './templates/section-heading.mjs';
+import { API_ENDPOINTS } from './templates/api-help.mjs';
+
 
 /** Default timeout for Puppeteer operations (ms). */
 const PUPPETEER_CALL_TIMEOUT_MS = 30_000;
@@ -155,7 +155,6 @@ export function createHttpServer(options) {
         return;
       }
       try {
-        const statsBeforeDump = s.logBuffer.getStats();
         const pages = s.getPages();
         const page = pages.length > 0 ? pages[0] : null;
 
@@ -172,26 +171,14 @@ export function createHttpServer(options) {
           success: true,
           timestamp: getFullTimestamp(),
           message: 'Dump completed. Read the files below.',
-          stats: statsBeforeDump,
-          outputFiles: {
-            consoleLog: s.logBuffer.CONSOLE_LOG,
-            networkLog: s.logBuffer.NETWORK_LOG,
-            networkDir: s.logBuffer.NETWORK_DIR,
-            cookiesDir: s.logBuffer.COOKIES_DIR,
-            domHtml: s.logBuffer.DOM_HTML,
-            screenshot: s.logBuffer.SCREENSHOT,
-          },
-          llm: {
-            instruction: 'Read or download these files to get the current browser state. Do not ask the user to copy/paste from the browser.',
-            files: [
-              { path: s.logBuffer.DOM_HTML, what: 'Current page HTML (JS-modified DOM). Use for element tree and structure.' },
-              { path: s.logBuffer.SCREENSHOT, what: 'Screenshot of the current tab viewport (PNG).' },
-              { path: s.logBuffer.CONSOLE_LOG, what: 'Browser console output (logs, errors, warnings).' },
-              { path: s.logBuffer.NETWORK_LOG, what: 'Network requests overview (one line per request with ID).' },
-              { path: s.logBuffer.NETWORK_DIR, what: 'Directory with one JSON per request: full headers, payload, response (see IDs in network log).' },
-              { path: s.logBuffer.COOKIES_DIR, what: 'Directory with cookies per domain (JSON files).' },
-            ],
-          },
+          files: [
+            { path: s.logBuffer.DOM_HTML, what: 'Current page HTML (JS-modified DOM). Use for element tree and structure.' },
+            { path: s.logBuffer.SCREENSHOT, what: 'Screenshot of the current tab viewport (PNG).' },
+            { path: s.logBuffer.CONSOLE_LOG, what: 'Browser console output (logs, errors, warnings).' },
+            { path: s.logBuffer.NETWORK_LOG, what: 'Network requests overview (one line per request with ID).' },
+            { path: s.logBuffer.NETWORK_DIR, what: 'Directory with one JSON per request: full headers, payload, response (see IDs in network log).' },
+            { path: s.logBuffer.COOKIES_DIR, what: 'Directory with cookies per domain (JSON files).' },
+          ],
         }, null, 2));
       } catch (error) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -200,7 +187,7 @@ export function createHttpServer(options) {
       return;
     }
 
-    // GET /status
+    // GET /status — state only (no file paths; use GET /dump for that)
     if (req.url === '/status' && req.method === 'GET') {
       const pages = s.getPages();
       const collectingPaused = s.getCollectingPaused();
@@ -215,14 +202,6 @@ export function createHttpServer(options) {
       if (!noBrowser) {
         payload.collecting = collectingPaused ? 'paused' : 'running';
         payload.stats = s.logBuffer.getStats();
-        payload.outputFiles = {
-          consoleLog: s.logBuffer.CONSOLE_LOG,
-          networkLog: s.logBuffer.NETWORK_LOG,
-          networkDir: s.logBuffer.NETWORK_DIR,
-          cookiesDir: s.logBuffer.COOKIES_DIR,
-          domHtml: s.logBuffer.DOM_HTML,
-          screenshot: s.logBuffer.SCREENSHOT,
-        };
       } else {
         payload.message = 'No browser. Use interactive (o/j) or --open / --join.';
       }
@@ -500,12 +479,7 @@ export function createHttpServer(options) {
     }, null, 2));
   });
 
-  server.listen(port, host, () => {
-    const url = `http://${host}:${port}`;
-    const changed = port !== defaultPort ? ` ${C.red}(changed)${C.reset}` : '';
-    const title = `HTTP API URL: ${url}${changed}`;
-    printSectionHeading(title, '  ');
-  });
+  server.listen(port, host);
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {

@@ -30,7 +30,7 @@ export class LogBuffer {
       ignorePatterns = [],
     } = options;
 
-    this.outputDir = outputDir;
+    this.outputDir = path.resolve(outputDir);
     this.lazyMode = lazyMode;
 
     if (paths) {

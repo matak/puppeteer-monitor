@@ -43,6 +43,7 @@ const API_USAGE =
  * @param {Object} options
  * @param {number} [options.port=60001]
  * @param {string} [options.host='127.0.0.1']
+ * @param {string} [options.url] - Browser URL being monitored (shown in header)
  * @param {boolean} [options.showApi=true]
  * @param {boolean} [options.showInteractive=false] - Interactive help (keyboard shortcuts, human interaction)
  * @param {boolean} [options.showOutputFiles=true]
@@ -54,6 +55,7 @@ export function printApiHelpTable(options = {}) {
   const {
     port = 60001,
     host = '127.0.0.1',
+    url = null,
     showApi = true,
     showInteractive = false,
     showOutputFiles = true,
@@ -66,7 +68,8 @@ export function printApiHelpTable(options = {}) {
 
   if (showApi) {
     if (!noLeadingNewline) console.log('');
-    printSectionHeading('HTTP API', INDENT);
+    const heading = url ? `HTTP API  ${C.dim}→${C.reset}  ${C.brightCyan}${url}${C.reset}` : 'HTTP API';
+    printSectionHeading(heading, INDENT);
 
     const hasSession = sessionContext && (sessionContext.currentUrl || sessionContext.profilePath);
     const apiTable = createTable({
@@ -133,7 +136,7 @@ export function printApiHelpTable(options = {}) {
 
   // Same info without tables, structured for LLM (no box-drawing / table chars; no keyboard shortcuts)
   if (showApi || showOutputFiles) {
-    printApiHelpForLlm({ port, host, showApi, showOutputFiles, context, sessionContext });
+    printApiHelpForLlm({ port, host, url, showApi, showOutputFiles, context, sessionContext });
   }
 
   console.log('');
@@ -147,6 +150,7 @@ function printApiHelpForLlm(options = {}) {
   const {
     port = 60001,
     host = '127.0.0.1',
+    url = null,
     showApi = true,
     showOutputFiles = true,
     context = null,
@@ -168,6 +172,9 @@ function printApiHelpForLlm(options = {}) {
   console.log('');
   console.log('--- LLM reference (plain text, no tables) ---');
   console.log('');
+  if (url) {
+    console.log('Browser URL: ' + url);
+  }
   console.log('Base URL: ' + baseUrl);
   if (sessionContext?.currentUrl) {
     console.log('Monitored URL: ' + sessionContext.currentUrl);
@@ -201,12 +208,3 @@ function printApiHelpForLlm(options = {}) {
   console.log('');
 }
 
-/**
- * One-line API hint (for Ready bar and intro).
- * @param {number} port
- * @param {string} [host='127.0.0.1']
- */
-export function apiHintOneLine(port, host = '127.0.0.1') {
-  const base = `http://${host}:${port}`;
-  return `${C.dim}curl ${base}/dump  ${base}/status  ${base}/stop  ${base}/start${C.reset}`;
-}

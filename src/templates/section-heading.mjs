@@ -5,7 +5,7 @@
 
 import boxen from 'boxen';
 import { C } from '../utils/colors.mjs';
-import { createTable, printTable } from './table-helper.mjs';
+import { createTable, formatTable, printTable } from './table-helper.mjs';
 
 /** Shared boxen options – single border, dim gray, no padding, left margin for alignment with other blocks. */
 export const BOXEN_OPTS = {
@@ -73,18 +73,21 @@ function wrapPlainText(text, maxLen) {
  */
 const MAX_LINE_WIDTH = 71; // wrap long lines at this (prefix excluded)
 
-export function printBulletBox(lines, indent = '  ') {
+export function printBulletBox(lines, indent = '  ', opts = {}) {
   if (lines.length === 0) return;
+  const dim = opts.dim || false;
   const bullet = ' • ';
+  const bulletColor = dim ? C.dim : C.cyan;
   const contentWidth = MAX_LINE_WIDTH;
   const contentLines = [];
   for (const line of lines) {
     const plain = stripAnsi(line);
     const wrapped = plain.length <= contentWidth ? [line] : wrapPlainText(plain, contentWidth);
     for (let i = 0; i < wrapped.length; i++) {
-      const prefix = i === 0 ? `${C.cyan}${bullet}${C.reset}` : '   ';
+      const prefix = i === 0 ? `${bulletColor}${bullet}${C.reset}` : '   ';
       const chunk = wrapped[i];
-      const display = i === 0 && wrapped.length === 1 ? line : chunk;
+      let display = i === 0 && wrapped.length === 1 ? line : chunk;
+      if (dim) display = `${C.dim}${stripAnsi(display)}${C.reset}`;
       contentLines.push(`${prefix}${display}`);
     }
   }
@@ -94,7 +97,9 @@ export function printBulletBox(lines, indent = '  ') {
     tableOpts: { wordWrap: true, maxWidth: 80 },
   });
   table.push([content]);
-  printTable(table, indent);
+  let output = formatTable(table, indent);
+  if (dim) output = `${C.dim}${output}${C.reset}`;
+  console.log(output);
 }
 
 /**
@@ -107,17 +112,6 @@ export function printModeHeading(mode, indent = '  ') {
   const titleLine = `  ${mode}  `;
   const content = `${C.bgCyan}${C.bold}${C.white}${titleLine}${C.reset}`;
   console.log('');
-  console.log(renderBox(content, indent));
-}
-
-/**
- * Print Interactive menu block – title with blue background filling full width.
- * Options are printed outside the box by the caller.
- * @param {string} titleLine - e.g. "  Interactive   Chrome not started – choose action"
- * @param {string} [indent='  ']
- */
-export function printInteractiveMenuBlock(titleLine, indent = '  ') {
-  const content = `${C.bgCyan}${C.bold}${C.white}${titleLine}${C.reset}`;
   console.log(renderBox(content, indent));
 }
 

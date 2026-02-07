@@ -10,7 +10,6 @@ export {
   isWsl,
   getWslDistroName,
   getWindowsHostForWSL,
-  wslToWindowsPath,
 } from './detect.mjs';
 
 // Chrome detection and launch
@@ -26,8 +25,6 @@ export {
   findFreeDebugPort,
   startChromeOnWindows,
   killPuppeteerMonitorChromes,
-  checkChromeRunning,
-  launchChromeFromWSL,
 } from './chrome.mjs';
 
 // Port proxy management
